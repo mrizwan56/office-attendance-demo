@@ -55,12 +55,14 @@ def connect_db():
     return conn
 
 
+
 def init_db():
     with connect_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS attendance (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 employee_id TEXT NOT NULL,
+                employee_name TEXT NOT NULL DEFAULT '',
                 work_location TEXT NOT NULL,
                 submitted_at TEXT NOT NULL,
                 work_date TEXT NOT NULL,
@@ -71,7 +73,23 @@ def init_db():
                 duplicate_flag INTEGER NOT NULL DEFAULT 0
             )
         """)
+
+        # Migrate existing databases without deleting records.
+        columns = {
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(attendance)"
+            ).fetchall()
+        }
+
+        if "employee_name" not in columns:
+            conn.execute("""
+                ALTER TABLE attendance
+                ADD COLUMN employee_name TEXT NOT NULL DEFAULT ''
+            """)
+
         conn.commit()
+
 
 
 def save_submission(employee_id, location, image_data, image_type):
