@@ -491,36 +491,66 @@ else:
                     st.rerun()
 
                 # Delete selected record.
+                
+                # Independent record selector for deletion.
                 st.divider()
-                st.subheader("Delete attendance record")
+                st.subheader("Delete a specific attendance record")
 
                 st.warning(
-                    "Deleting this record permanently removes "
-                    "its attendance details and stored photo."
+                    "Deletion is permanent. The selected attendance "
+                    "record and its stored photo will be removed."
                 )
 
-                with st.form(f"delete_form_{record_id}"):
-                    confirm_delete = st.checkbox(
-                        f"I confirm deletion of record {record_id}"
-                    )
+                all_records = load_records()
 
-                    delete_clicked = st.form_submit_button(
-                        "Delete this record",
-                        type="primary",
-                    )
+                if all_records.empty:
+                    st.info("There are no records available to delete.")
 
-                if delete_clicked:
-                    if confirm_delete:
-                        delete_record(record_id)
-                        st.success(
-                            f"Record {record_id} and its photo "
-                            "have been deleted."
+                else:
+                    delete_options = {
+                        (
+                            f"Record {row.id} | "
+                            f"{row.employee_name or 'Name missing'} "
+                            f"({row.employee_id}) | "
+                            f"{row.work_date} | "
+                            f"{row.work_location}"
+                        ): int(row.id)
+                        for row in all_records.itertuples()
+                    }
+
+                    with st.form("delete_selected_record_form"):
+                        selected_delete_label = st.selectbox(
+                            "Choose the employee record to delete",
+                            options=list(delete_options.keys()),
                         )
-                        st.rerun()
-                    else:
-                        st.error(
-                            "Please confirm deletion before proceeding."
+
+                        confirm_delete = st.checkbox(
+                            "I confirm I want to permanently delete "
+                            "the selected record."
                         )
+
+                        delete_clicked = st.form_submit_button(
+                            "Delete selected record",
+                            type="primary",
+                        )
+
+                    if delete_clicked:
+                        if not confirm_delete:
+                            st.error(
+                                "Please confirm deletion first."
+                            )
+                        else:
+                            selected_delete_id = delete_options[
+                                selected_delete_label
+                            ]
+
+                            delete_record(selected_delete_id)
+
+                            st.success(
+                                f"Record {selected_delete_id} "
+                                "and its stored photo have been deleted."
+                            )
+                            st.rerun()
 
         # Lock dashboard.
         st.divider()
