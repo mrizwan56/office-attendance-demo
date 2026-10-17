@@ -1,4 +1,4 @@
-
+import hmac
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +18,30 @@ st.set_page_config(
     page_icon="🏢",
     layout="wide",
 )
+def require_admin():
+    """Return True only after the admin password is accepted."""
 
+    if st.session_state.get("admin_authenticated", False):
+        return True
+
+    st.subheader("Administrator access")
+
+    password = st.text_input(
+        "Admin password",
+        type="password",
+        key="admin_password_input",
+    )
+
+    if st.button("Unlock admin dashboard"):
+        expected = st.secrets.get("ADMIN_PASSWORD", "")
+
+        if expected and hmac.compare_digest(password, expected):
+            st.session_state["admin_authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+
+    return False
 
 # -----------------------------
 # Database
