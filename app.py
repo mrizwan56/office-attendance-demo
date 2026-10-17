@@ -143,9 +143,31 @@ st.caption(
     "or physical-location verification."
 )
 
-employee_tab, admin_tab = st.tabs([
-    "Employee Check-in",
-    "Admin Dashboard",
+page = st.radio(
+    "Navigate",
+    ["Employee Check-in", "Admin Dashboard"],
+    horizontal=True,
+)
+
+if page == "Employee Check-in":
+
+    # Move your existing employee check-in code here.
+    # Keep the form, camera capture and save_submission() call.
+
+else:
+
+    if require_admin():
+
+        # Move ALL your existing admin dashboard code here:
+        # load_records()
+        # attendance metrics and tables
+        # load_image() and st.image()
+        # CSV export
+        # review form and update_review()
+
+        if st.button("Lock admin dashboard"):
+            st.session_state["admin_authenticated"] = False
+            st.rerun()
 ])
 
 
