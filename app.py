@@ -8,8 +8,12 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 
+
+# =========================================================
+# CONFIGURATION
+# =========================================================
 DB_PATH = Path("attendance.db")
-MAX_IMAGE_SIZE = 5 * 1024 * 1024
+MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB
 
 st.set_page_config(
     page_title="Office Attendance Register",
@@ -18,9 +22,9 @@ st.set_page_config(
 )
 
 
-# -----------------------------
-# Admin access control
-# -----------------------------
+# =========================================================
+# ADMIN AUTHENTICATION
+# =========================================================
 def require_admin():
     if st.session_state.get("admin_authenticated", False):
         return True
@@ -46,14 +50,13 @@ def require_admin():
     return False
 
 
-# -----------------------------
-# Database
-# -----------------------------
+# =========================================================
+# DATABASE
+# =========================================================
 def connect_db():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
-
 
 
 def init_db():
@@ -74,7 +77,7 @@ def init_db():
             )
         """)
 
-        # Migrate existing databases without deleting records.
+        # Safely add employee_name to an existing database.
         columns = {
             row["name"]
             for row in conn.execute(
@@ -91,15 +94,21 @@ def init_db():
         conn.commit()
 
 
-
-def save_submission(employee_id, location, image_data, image_type):
+def save_submission(
+    employee_id,
+    employee_name,
+    location,
+    image_data,
+    image_type,
+):
     now = datetime.now().astimezone()
     submitted_at = now.isoformat(timespec="seconds")
     work_date = now.date().isoformat()
 
     with connect_db() as conn:
         previous = conn.execute("""
-            SELECT COUNT(*) FROM attendance
+            SELECT COUNT(*)
+            FROM attendance
             WHERE employee_id = ? AND work_date = ?
         """, (employee_id, work_date)).fetchone()[0]
 
@@ -107,14 +116,26 @@ def save_submission(employee_id, location, image_data, image_type):
 
         cursor = conn.execute("""
             INSERT INTO attendance (
-                employee_id, work_location, submitted_at,
-                work_date, image_data, image_type,
-                review_status, duplicate_flag
+                employee_id,
+                employee_name,
+                work_location,
+                submitted_at,
+                work_date,
+                image_data,
+                image_type,
+                review_status,
+                duplicate_flag
             )
-            VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', ?)
         """, (
-            employee_id, location, submitted_at, work_date,
-            image_data, image_type, duplicate_flag
+            employee_id,
+            employee_name,
+            location,
+            submitted_at,
+            work_date,
+            image_data,
+            image_type,
+            duplicate_flag,
         ))
 
         conn.commit()
@@ -124,9 +145,16 @@ def save_submission(employee_id, location, image_data, image_type):
 def load_records():
     with connect_db() as conn:
         return pd.read_sql_query("""
-            SELECT id, employee_id, work_location,
-                   submitted_at, work_date, review_status,
-                   review_note, duplicate_flag
+            SELECT
+                id,
+                employee_id,
+                employee_name,
+                work_location,
+                submitted_at,
+                work_date,
+                review_status,
+                review_note,
+                duplicate_flag
             FROM attendance
             ORDER BY id DESC
         """, conn)
@@ -136,8 +164,9 @@ def load_image(record_id):
     with connect_db() as conn:
         return conn.execute("""
             SELECT image_data, image_type
-            FROM attendance WHERE id = ?
-        """, (record_id,)).fetchone()
+            FROM attendance
+            WHERE id = ?
+        """, (int(record_id),)).fetchone()
 
 
 def update_review(record_id, status, note):
@@ -146,20 +175,30 @@ def update_review(record_id, status, note):
             UPDATE attendance
             SET review_status = ?, review_note = ?
             WHERE id = ?
-        """, (status, note, record_id))
+        """, (status, note, int(record_id)))
         conn.commit()
 
 
+def delete_record(record_id):
+    with connect_db() as conn:
+        conn.execute(
+            "DELETE FROM attendance WHERE id = ?",
+            (int(record_id),),
+        )
+        conn.commit()
+
+
+# Initialize or migrate the database.
 init_db()
 
 
-# -----------------------------
-# Application navigation
-# -----------------------------
+# =========================================================
+# APPLICATION HEADER AND NAVIGATION
+# =========================================================
 st.title("🏢 Office Attendance Photo Register")
 st.caption(
-    "Attendance submissions are employee-provided records. "
-    "A photo and employee ID do not independently verify "
+    "Attendance records contain employee-submitted information. "
+    "An employee ID and photo alone do not independently verify "
     "identity or physical location."
 )
 
@@ -170,9 +209,9 @@ page = st.radio(
 )
 
 
-# -----------------------------
-# Employee check-in
-# -----------------------------
+# =========================================================
+# EMPLOYEE CHECK-IN
+# =========================================================
 if page == "Employee Check-in":
     st.subheader("Submit today's attendance")
 
@@ -183,17 +222,28 @@ if page == "Employee Check-in":
             max_chars=30,
         )
 
+        employee_name = st.text_input(
+            "Employee Name",
+            placeholder="Enter your full name",
+            max_chars=100,
+        )
+
         location = st.selectbox(
             "Declared work location",
             ["Office", "Remote"],
         )
 
         st.write("Capture a check-in photo")
-        photo = st.camera_input("Take a photo")
+
+        photo = st.camera_input(
+            "Take a photo",
+            key="attendance_camera",
+        )
 
         uploaded_photo = st.file_uploader(
             "Or upload a photo",
             type=["jpg", "jpeg", "png"],
+            key="attendance_upload",
         )
 
         st.caption(
@@ -208,16 +258,21 @@ if page == "Employee Check-in":
 
     if submitted:
         clean_id = employee_id.strip()
+        clean_name = employee_name.strip()
 
         if not clean_id:
             st.error("Please enter your employee ID.")
+
+        elif not clean_name:
+            st.error("Please enter your employee name.")
 
         elif photo is None and uploaded_photo is None:
             st.error("Please capture or upload a photo.")
 
         else:
             selected_photo = (
-                uploaded_photo if uploaded_photo is not None
+                uploaded_photo
+                if uploaded_photo is not None
                 else photo
             )
 
@@ -237,35 +292,40 @@ if page == "Employee Check-in":
                 try:
                     record_id, is_duplicate = save_submission(
                         clean_id,
+                        clean_name,
                         location,
                         image_bytes,
                         image_type,
                     )
 
                     st.success(
-                        f"Attendance submitted. Record ID: {record_id}"
+                        f"Attendance submitted successfully. "
+                        f"Record ID: {record_id}"
                     )
 
                     if is_duplicate:
                         st.warning(
                             "A submission already exists for this "
-                            "employee and date. This record is "
-                            "flagged for review."
+                            "employee and date. This submission "
+                            "has been flagged for review."
                         )
 
                 except sqlite3.Error:
                     st.error(
-                        "Could not save the record. "
+                        "Could not save the attendance record. "
                         "Please contact the administrator."
                     )
 
 
-# -----------------------------
-# Admin dashboard
-# -----------------------------
+# =========================================================
+# ADMIN DASHBOARD
+# =========================================================
 else:
     if not require_admin():
-        st.info("Enter the administrator password to continue.")
+        st.info(
+            "Enter the administrator password to access "
+            "attendance records and photos."
+        )
 
     else:
         st.subheader("Attendance records")
@@ -273,7 +333,7 @@ else:
         records = load_records()
 
         if records.empty:
-            st.info("No attendance records have been submitted yet.")
+            st.info("No attendance records have been submitted.")
 
         else:
             total = len(records)
@@ -282,11 +342,12 @@ else:
             )
             duplicates = int(records["duplicate_flag"].sum())
 
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Total submissions", total)
-            c2.metric("Pending review", pending)
-            c3.metric("Duplicate flags", duplicates)
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total submissions", total)
+            col2.metric("Pending review", pending)
+            col3.metric("Duplicate flags", duplicates)
 
+            # Filter by work date.
             dates = sorted(
                 records["work_date"].dropna().unique().tolist(),
                 reverse=True,
@@ -304,15 +365,28 @@ else:
                     filtered["work_date"] == selected_date
                 ]
 
+            # Display records.
+            display_columns = [
+                "id",
+                "employee_id",
+                "employee_name",
+                "work_location",
+                "submitted_at",
+                "work_date",
+                "review_status",
+                "review_note",
+            ]
+
             st.dataframe(
-                filtered.drop(columns=["duplicate_flag"]),
+                filtered[display_columns],
                 use_container_width=True,
                 hide_index=True,
             )
 
-            csv_data = filtered.drop(
-                columns=["duplicate_flag"]
-            ).to_csv(index=False).encode("utf-8")
+            # CSV export.
+            csv_data = filtered[display_columns].to_csv(
+                index=False
+            ).encode("utf-8")
 
             st.download_button(
                 "Download attendance CSV",
@@ -325,8 +399,12 @@ else:
             st.subheader("Review individual submissions")
 
             record_options = {
-                f"Record {row.id} | {row.employee_id} | "
-                f"{row.work_date} | {row.review_status}": int(row.id)
+                (
+                    f"Record {row.id} | "
+                    f"{row.employee_name or 'Name missing'} "
+                    f"({row.employee_id}) | "
+                    f"{row.work_date} | {row.review_status}"
+                ): int(row.id)
                 for row in filtered.itertuples()
             }
 
@@ -343,13 +421,24 @@ else:
                 ].iloc[0]
 
                 st.write("Employee ID:", record["employee_id"])
-                st.write("Declared location:", record["work_location"])
+                st.write(
+                    "Employee Name:",
+                    record["employee_name"] or "Not provided",
+                )
+                st.write(
+                    "Declared location:",
+                    record["work_location"],
+                )
                 st.write("Submitted at:", record["submitted_at"])
                 st.write("Review status:", record["review_status"])
 
                 if record["duplicate_flag"]:
-                    st.warning("Duplicate submission flag.")
+                    st.warning(
+                        "Duplicate submission flag: another record "
+                        "exists for this employee and date."
+                    )
 
+                # Display the selected photo.
                 image_row = load_image(record_id)
 
                 if image_row and image_row["image_data"]:
@@ -359,8 +448,9 @@ else:
                         width=350,
                     )
                 else:
-                    st.warning("No image is available.")
+                    st.warning("No image is available for this record.")
 
+                # Review form.
                 with st.form(f"review_form_{record_id}"):
                     statuses = [
                         "Pending",
@@ -369,9 +459,11 @@ else:
                     ]
 
                     current_status = record["review_status"]
+
                     status_index = (
                         statuses.index(current_status)
-                        if current_status in statuses else 0
+                        if current_status in statuses
+                        else 0
                     )
 
                     new_status = st.selectbox(
@@ -385,13 +477,52 @@ else:
                         value=record["review_note"] or "",
                     )
 
-                    save_review = st.form_submit_button("Save review")
+                    save_review = st.form_submit_button(
+                        "Save review"
+                    )
 
                 if save_review:
-                    update_review(record_id, new_status, note)
+                    update_review(
+                        record_id,
+                        new_status,
+                        note,
+                    )
                     st.success("Review status saved.")
                     st.rerun()
 
+                # Delete selected record.
+                st.divider()
+                st.subheader("Delete attendance record")
+
+                st.warning(
+                    "Deleting this record permanently removes "
+                    "its attendance details and stored photo."
+                )
+
+                with st.form(f"delete_form_{record_id}"):
+                    confirm_delete = st.checkbox(
+                        f"I confirm deletion of record {record_id}"
+                    )
+
+                    delete_clicked = st.form_submit_button(
+                        "Delete this record",
+                        type="primary",
+                    )
+
+                if delete_clicked:
+                    if confirm_delete:
+                        delete_record(record_id)
+                        st.success(
+                            f"Record {record_id} and its photo "
+                            "have been deleted."
+                        )
+                        st.rerun()
+                    else:
+                        st.error(
+                            "Please confirm deletion before proceeding."
+                        )
+
+        # Lock dashboard.
         st.divider()
 
         if st.button("Lock admin dashboard"):
